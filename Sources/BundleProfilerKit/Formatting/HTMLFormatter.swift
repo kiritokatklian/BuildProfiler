@@ -17,6 +17,9 @@ public struct HTMLFormatter: Sendable {
         let rootJSON = buildTreeJSON(from: bundle)
         let jsonData = try JSONSerialization.data(withJSONObject: rootJSON, options: [.sortedKeys])
         let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
+        let insightsJSON = try buildInsightsJSON(from: bundle)
+        let css = try Self.loadResource("report", withExtension: "css")
+        let javascript = try Self.loadResource("report", withExtension: "js")
 
         return """
         <!DOCTYPE html>
@@ -26,7 +29,7 @@ public struct HTMLFormatter: Sendable {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Bundle Report — \(escapeHTML(bundle.bundleName))</title>
         <style>
-        \(Self.css)
+        \(css)
         </style>
         </head>
         <body>
@@ -36,18 +39,37 @@ public struct HTMLFormatter: Sendable {
         </div>
         <div id="search-container">
           <input id="search" type="text" placeholder="Search files..." />
+          <div id="search-results"></div>
         </div>
+        <h2 class="section-title">Size Analysis</h2>
         <div id="legend"></div>
+        <div id="view-modes">
+          <button class="mode-btn active" data-mode="treemap">Treemap</button>
+          <button class="mode-btn" data-mode="pie">Pie</button>
+          <button class="mode-btn" data-mode="donut">Donut</button>
+        </div>
         <div id="breadcrumb"></div>
         <div id="treemap"></div>
         <div id="tooltip"></div>
+        <div id="insights"></div>
         <script>
         const DATA = \(jsonString);
-        \(Self.javascript)
+        const INSIGHTS = \(insightsJSON);
+        \(javascript)
         </script>
         </body>
         </html>
         """
+    }
+
+    // MARK: - Insights JSON
+
+    private func buildInsightsJSON(from bundle: BundleInfo) throws -> String {
+        let insights = InsightGenerator.generate(from: bundle)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let data = try encoder.encode(insights)
+        return String(data: data, encoding: .utf8) ?? "[]"
     }
 
     // MARK: - Tree Building
@@ -317,362 +339,23 @@ public struct HTMLFormatter: Sendable {
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    // MARK: - Embedded Assets
+    // MARK: - Resource Loading
 
-    private static let css = """
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; }
-    #header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: #16213e; }
-    #header h1 { font-size: 20px; font-weight: 600; }
-    .total { font-size: 16px; color: #a0a0b0; }
-    #search-container { padding: 8px 24px 0; }
-    #search { width: 100%; padding: 8px 12px; background: #16213e; border: 1px solid #333355; border-radius: 6px; color: #e0e0e0; font-size: 14px; outline: none; }
-    #search:focus { border-color: #6666aa; box-shadow: 0 0 0 2px rgba(102,102,170,0.3); }
-    #search::placeholder { color: #666688; }
-    #legend { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 24px; min-height: 20px; }
-    .legend-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); user-select: none; transition: opacity 0.15s; }
-    .legend-chip .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
-    .legend-chip.dimmed { opacity: 0.3; }
-    #breadcrumb { padding: 8px 24px; background: #1a1a2e; font-size: 13px; color: #8888aa; min-height: 32px; display: flex; align-items: center; gap: 4px; }
-    #breadcrumb span { cursor: pointer; }
-    #breadcrumb span:hover { color: #ffffff; text-decoration: underline; }
-    #breadcrumb .sep { color: #555; cursor: default; }
-    #treemap { position: relative; width: calc(100vw - 48px); height: calc(100vh - 220px); margin: 0 24px 24px; }
-    .node { position: absolute; overflow: hidden; cursor: pointer; border: 1px solid rgba(0,0,0,0.3); transition: opacity 0.15s; }
-    .node:hover { opacity: 0.85; }
-    .node.search-match { box-shadow: 0 0 0 2px #fff, 0 0 8px rgba(255,255,255,0.5); z-index: 10; }
-    .node.search-dim { opacity: 0.2; }
-    .node.category-dim { opacity: 0.2; }
-    .node-label { position: absolute; top: 4px; left: 6px; right: 6px; font-size: 11px; font-weight: 500; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
-    .node-size { position: absolute; top: 18px; left: 6px; font-size: 10px; color: rgba(255,255,255,0.7); text-shadow: 0 1px 2px rgba(0,0,0,0.5); pointer-events: none; }
-    #tooltip { display: none; position: fixed; background: #222244; border: 1px solid #444466; border-radius: 6px; padding: 10px 14px; font-size: 13px; pointer-events: none; z-index: 100; max-width: 350px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
-    #tooltip .tt-name { font-weight: 600; margin-bottom: 4px; }
-    #tooltip .tt-size { color: #aaa; }
-    #tooltip .tt-cat { color: #8888cc; font-size: 12px; }
-    """
+    private enum ResourceError: Error, CustomStringConvertible {
+        case missingResource(name: String, extension: String)
 
-    private static let javascript = """
-    const COLORS = {
-      executable: '#e74c3c', framework: '#e67e22', assetCatalog: '#f1c40f',
-      storyboard: '#2ecc71', xib: '#27ae60', strings: '#1abc9c',
-      font: '#3498db', plist: '#9b59b6', codeSignature: '#7f8c8d',
-      image: '#e91e63', audio: '#00bcd4', video: '#ff5722',
-      mlModel: '#8bc34a', metalLibrary: '#ff9800', appExtension: '#673ab7',
-      localization: '#009688', header: '#607d8b', moduleMap: '#795548',
-      other: '#555577'
-    };
-
-    function formatSize(bytes) {
-      if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB';
-      if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
-      if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
-      return bytes + ' B';
-    }
-
-    function getColor(node) {
-      if (node.category) return COLORS[node.category] || COLORS.other;
-      if (node.children && node.children.length > 0) {
-        return getColor(node.children[0]);
-      }
-      return COLORS.other;
-    }
-
-    function assignColors(node) {
-      if (node.children) {
-        node.children.forEach(assignColors);
-        const cats = {};
-        node.children.forEach(c => {
-          const col = getColor(c);
-          cats[col] = (cats[col] || 0) + c.size;
-        });
-        let maxSize = 0, dominant = COLORS.other;
-        for (const [col, sz] of Object.entries(cats)) {
-          if (sz > maxSize) { maxSize = sz; dominant = col; }
+        var description: String {
+            switch self {
+            case .missingResource(let name, let ext):
+                return "Missing bundled resource: \(name).\(ext)"
+            }
         }
-        if (!node.category) node._color = dominant;
-      }
-      if (!node._color) node._color = getColor(node);
     }
 
-    // Squarified treemap layout
-    function squarify(items, x, y, w, h) {
-      const rects = [];
-      if (!items.length || w <= 0 || h <= 0) return rects;
-
-      const total = items.reduce((s, d) => s + d.size, 0);
-      if (total === 0) return rects;
-
-      const sorted = [...items].sort((a, b) => b.size - a.size);
-      layoutStrip(sorted, 0, x, y, w, h, total, rects);
-      return rects;
+    private static func loadResource(_ name: String, withExtension ext: String) throws -> String {
+        guard let url = Bundle.module.url(forResource: name, withExtension: ext) else {
+            throw ResourceError.missingResource(name: name, extension: ext)
+        }
+        return try String(contentsOf: url, encoding: .utf8)
     }
-
-    function layoutStrip(items, idx, x, y, w, h, total, rects) {
-      if (idx >= items.length) return;
-      if (w <= 0 || h <= 0) return;
-
-      const remaining = items.slice(idx).reduce((s, d) => s + d.size, 0);
-      if (remaining <= 0) return;
-
-      const vertical = h > w;
-      const mainDim = vertical ? h : w;
-      const crossDim = vertical ? w : h;
-
-      let strip = [];
-      let stripSum = 0;
-      let bestRatio = Infinity;
-
-      for (let i = idx; i < items.length; i++) {
-        const testStrip = [...strip, items[i]];
-        const testSum = stripSum + items[i].size;
-        const stripFrac = testSum / remaining;
-        const stripCross = crossDim * stripFrac;
-
-        if (stripCross <= 0) break;
-
-        let worstRatio = 0;
-        for (const item of testStrip) {
-          const itemFrac = item.size / testSum;
-          const itemMain = mainDim * itemFrac;
-          const ratio = Math.max(itemMain / stripCross, stripCross / itemMain);
-          worstRatio = Math.max(worstRatio, ratio);
-        }
-
-        if (worstRatio > bestRatio && strip.length > 0) break;
-
-        strip = testStrip;
-        stripSum = testSum;
-        bestRatio = worstRatio;
-      }
-
-      const stripFrac = stripSum / remaining;
-      const stripCross = crossDim * stripFrac;
-      let pos = 0;
-
-      for (const item of strip) {
-        const itemFrac = item.size / stripSum;
-        const itemMain = mainDim * itemFrac;
-
-        let rx, ry, rw, rh;
-        if (vertical) {
-          rx = x; ry = y + pos; rw = stripCross; rh = itemMain;
-        } else {
-          rx = x + pos; ry = y; rw = itemMain; rh = stripCross;
-        }
-
-        rects.push({ node: item, x: rx, y: ry, w: rw, h: rh });
-        pos += itemMain;
-      }
-
-      const nextIdx = idx + strip.length;
-      if (vertical) {
-        layoutStrip(items, nextIdx, x + stripCross, y, w - stripCross, h, total, rects);
-      } else {
-        layoutStrip(items, nextIdx, x, y + stripCross, w, h - stripCross, total, rects);
-      }
-    }
-
-    // State
-    let currentNode = DATA;
-    let pathStack = [];
-    const container = document.getElementById('treemap');
-    const breadcrumb = document.getElementById('breadcrumb');
-    const tooltip = document.getElementById('tooltip');
-
-    assignColors(DATA);
-
-    function render(node) {
-      container.innerHTML = '';
-      const rect = container.getBoundingClientRect();
-      const children = node.children || [];
-      if (!children.length) return;
-
-      const rects = squarify(children, 0, 0, rect.width, rect.height);
-
-      for (const r of rects) {
-        if (r.w < 2 || r.h < 2) continue;
-
-        const el = document.createElement('div');
-        el.className = 'node';
-        el.style.left = r.x + 'px';
-        el.style.top = r.y + 'px';
-        el.style.width = r.w + 'px';
-        el.style.height = r.h + 'px';
-        el.style.background = r.node._color || getColor(r.node);
-        el.dataset.name = r.node.name;
-        el.dataset.category = r.node.category || '';
-
-        if (r.w > 40 && r.h > 18) {
-          const label = document.createElement('div');
-          label.className = 'node-label';
-          label.textContent = r.node.name;
-          el.appendChild(label);
-        }
-        if (r.w > 60 && r.h > 32) {
-          const sizeLabel = document.createElement('div');
-          sizeLabel.className = 'node-size';
-          sizeLabel.textContent = formatSize(r.node.size);
-          el.appendChild(sizeLabel);
-        }
-
-        el.addEventListener('click', () => {
-          if (r.node.children && r.node.children.length > 0) {
-            pathStack.push(currentNode);
-            currentNode = r.node;
-            render(currentNode);
-            renderBreadcrumb();
-          }
-        });
-
-        el.addEventListener('mouseenter', (e) => {
-          tooltip.style.display = 'block';
-          let html = '<div class="tt-name">' + escapeHTML(r.node.name) + '</div>';
-          html += '<div class="tt-size">' + formatSize(r.node.size) + '</div>';
-          if (r.node.category) html += '<div class="tt-cat">' + r.node.category + '</div>';
-          if (r.node.children) html += '<div class="tt-cat">' + r.node.children.length + ' items</div>';
-          tooltip.innerHTML = html;
-        });
-
-        el.addEventListener('mousemove', (e) => {
-          tooltip.style.left = (e.clientX + 12) + 'px';
-          tooltip.style.top = (e.clientY + 12) + 'px';
-        });
-
-        el.addEventListener('mouseleave', () => {
-          tooltip.style.display = 'none';
-        });
-
-        container.appendChild(el);
-      }
-    }
-
-    function renderBreadcrumb() {
-      breadcrumb.innerHTML = '';
-      const all = [...pathStack, currentNode];
-      all.forEach((node, i) => {
-        if (i > 0) {
-          const sep = document.createElement('span');
-          sep.className = 'sep';
-          sep.textContent = ' / ';
-          breadcrumb.appendChild(sep);
-        }
-        const span = document.createElement('span');
-        span.textContent = node.name;
-        if (i < all.length - 1) {
-          span.addEventListener('click', () => {
-            currentNode = all[i];
-            pathStack = all.slice(0, i);
-            render(currentNode);
-            renderBreadcrumb();
-          });
-        }
-        breadcrumb.appendChild(span);
-      });
-    }
-
-    function escapeHTML(s) {
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    }
-
-    // Search
-    const searchInput = document.getElementById('search');
-    let searchTimer = null;
-    const dimmedCategories = new Set();
-
-    searchInput.addEventListener('input', () => {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => {
-        const query = searchInput.value.trim().toLowerCase();
-        const nodes = container.querySelectorAll('.node');
-        if (!query) {
-          nodes.forEach(n => { n.classList.remove('search-match', 'search-dim'); });
-          return;
-        }
-        nodes.forEach(n => {
-          const name = (n.dataset.name || '').toLowerCase();
-          if (name.includes(query)) {
-            n.classList.add('search-match');
-            n.classList.remove('search-dim');
-          } else {
-            n.classList.add('search-dim');
-            n.classList.remove('search-match');
-          }
-        });
-      }, 150);
-    });
-
-    searchInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const match = container.querySelector('.node.search-match');
-        if (match) match.click();
-      }
-    });
-
-    // Legend
-    const legendContainer = document.getElementById('legend');
-
-    function gatherCategories(node) {
-      const cats = {};
-      (function walk(n) {
-        if (n.category) {
-          cats[n.category] = (cats[n.category] || 0) + n.size;
-        }
-        if (n.children) n.children.forEach(walk);
-      })(node);
-      return cats;
-    }
-
-    function buildLegend() {
-      legendContainer.innerHTML = '';
-      const cats = gatherCategories(currentNode);
-      const sorted = Object.entries(cats).sort((a, b) => b[1] - a[1]);
-      for (const [cat, size] of sorted) {
-        const chip = document.createElement('div');
-        chip.className = 'legend-chip' + (dimmedCategories.has(cat) ? ' dimmed' : '');
-        const swatch = document.createElement('span');
-        swatch.className = 'swatch';
-        swatch.style.background = COLORS[cat] || COLORS.other;
-        chip.appendChild(swatch);
-        chip.appendChild(document.createTextNode(cat + ' (' + formatSize(size) + ')'));
-        chip.addEventListener('click', () => {
-          if (dimmedCategories.has(cat)) {
-            dimmedCategories.delete(cat);
-            chip.classList.remove('dimmed');
-          } else {
-            dimmedCategories.add(cat);
-            chip.classList.add('dimmed');
-          }
-          applyFilter();
-        });
-        legendContainer.appendChild(chip);
-      }
-    }
-
-    function applyFilter() {
-      if (dimmedCategories.size === 0) {
-        container.querySelectorAll('.node').forEach(n => n.classList.remove('category-dim'));
-        return;
-      }
-      container.querySelectorAll('.node').forEach(n => {
-        const cat = n.dataset.category;
-        if (cat && dimmedCategories.has(cat)) {
-          n.classList.add('category-dim');
-        } else {
-          n.classList.remove('category-dim');
-        }
-      });
-    }
-
-    // Patch render to rebuild legend after each render
-    const _origRender = render;
-    render = function(node) {
-      _origRender(node);
-      buildLegend();
-      applyFilter();
-    };
-
-    window.addEventListener('resize', () => render(currentNode));
-    render(currentNode);
-    renderBreadcrumb();
-    """
 }

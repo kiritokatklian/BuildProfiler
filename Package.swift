@@ -27,7 +27,10 @@ let package = Package(
             ]
         ),
         .target(
-            name: "BundleProfilerKit"
+            name: "BundleProfilerKit",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .testTarget(
             name: "BundleProfilerKitTests",
