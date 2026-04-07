@@ -34,6 +34,18 @@ public struct BundleInfo: Codable, Sendable {
     /// Asset catalog analysis results.
     public let assetCatalogs: [AssetCatalogInfo]
 
+    /// Detected Swift Package Manager dependencies.
+    public let spmPackages: [SPMPackageInfo]
+
+    /// Report of potentially unused resources (opt-in via `--unused-resources`).
+    public let unusedResources: UnusedResourceReport?
+
+    /// App extension overhead analysis.
+    public let extensionReport: ExtensionOverheadReport?
+
+    /// Binary dependency graph.
+    public let dependencyGraph: DependencyGraph?
+
     /// Total wasted bytes from duplicates.
     public var totalWastedBytes: UInt64 {
         duplicates.reduce(0) { $0 + $1.wastedBytes }
@@ -47,7 +59,11 @@ public struct BundleInfo: Codable, Sendable {
         mainExecutable: MachOInfo?,
         frameworks: [FrameworkInfo],
         duplicates: [DuplicateGroup],
-        assetCatalogs: [AssetCatalogInfo]
+        assetCatalogs: [AssetCatalogInfo],
+        spmPackages: [SPMPackageInfo] = [],
+        unusedResources: UnusedResourceReport? = nil,
+        extensionReport: ExtensionOverheadReport? = nil,
+        dependencyGraph: DependencyGraph? = nil
     ) {
         self.bundleName = bundleName
         self.totalSize = totalSize
@@ -57,6 +73,10 @@ public struct BundleInfo: Codable, Sendable {
         self.frameworks = frameworks
         self.duplicates = duplicates
         self.assetCatalogs = assetCatalogs
+        self.spmPackages = spmPackages
+        self.unusedResources = unusedResources
+        self.extensionReport = extensionReport
+        self.dependencyGraph = dependencyGraph
     }
 }
 

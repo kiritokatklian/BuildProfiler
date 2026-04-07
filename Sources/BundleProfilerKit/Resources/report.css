@@ -27,12 +27,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sa
 #breadcrumb .sep { color: #555; cursor: default; }
 #treemap { position: relative; width: calc(100vw - 48px); height: calc(100vh - 260px); margin: 0 24px 24px; }
 .node { position: absolute; overflow: hidden; cursor: pointer; border: 1px solid rgba(0,0,0,0.3); border-radius: 2px; transition: opacity 0.15s; }
-.node:hover { opacity: 0.85; }
+.node.hovered { opacity: 0.85; }
 .node.search-match { box-shadow: 0 0 0 2px #fff, 0 0 8px rgba(255,255,255,0.5); z-index: 10; }
 .node.search-dim { opacity: 0.2; }
 .node.category-dim { opacity: 0.2; }
-.node-label { position: absolute; top: 4px; left: 6px; right: 6px; font-size: 11px; font-weight: 500; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
-.node-size { position: absolute; top: 18px; left: 6px; font-size: 10px; color: rgba(255,255,255,0.7); text-shadow: 0 1px 2px rgba(0,0,0,0.5); pointer-events: none; }
+.node-label { position: absolute; top: 4px; left: 6px; right: 6px; font-size: 11px; font-weight: 500; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; z-index: 2; }
+.node-size { position: absolute; top: 18px; left: 6px; font-size: 10px; color: rgba(255,255,255,0.7); text-shadow: 0 1px 2px rgba(0,0,0,0.5); pointer-events: none; z-index: 2; }
 .node-label.depth-1 { font-size: 10px; }
 .node-label.depth-2 { font-size: 9px; }
 .node-size.depth-1 { font-size: 9px; top: 16px; }
@@ -71,3 +71,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sa
 .insight-file .file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .insight-file .file-size { color: #aaa; margin-left: 12px; white-space: nowrap; }
 .insight-file .file-detail { color: #7a7aaa; margin-left: 8px; white-space: nowrap; }
+#dependency-graph { padding: 0 24px 24px; }
+#dep-graph-header { display: flex; align-items: center; gap: 8px; padding: 10px 0; }
+#dep-graph-header h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.dep-graph-summary { font-size: 13px; color: #8888aa; }
+.dep-tree { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 1.8; }
+.dep-node { padding-left: 20px; position: relative; }
+.dep-node.system { color: #666; }
+.dep-label { color: #e0e0e0; }
+.dep-node.system .dep-label { color: #666; }
+.dep-node.spm .dep-label { color: #3498db; }
+.dep-size { color: #8888aa; margin-left: 8px; font-size: 11px; }
+.dep-toggle { cursor: pointer; position: absolute; left: 4px; color: #6666aa; font-size: 10px; user-select: none; }
+.dep-toggle:hover { color: #8888cc; }
+.dep-tag { color: #f39c12; font-size: 10px; margin-left: 4px; }
+.dep-sys-count { color: #555; font-size: 11px; }
+.dep-children { padding-left: 12px; border-left: 1px solid rgba(255,255,255,0.06); }
+.dep-chain { margin-top: 12px; padding: 10px 14px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; font-size: 12px; }
+.dep-chain code { color: #8888cc; font-size: 11px; }
+.dep-chain-desc { margin-top: 8px; font-size: 11px; color: #888; line-height: 1.5; }

@@ -79,7 +79,6 @@ public struct MachOParser: Sendable {
     }
 
     // MARK: - Fat Binary Parsing
-
     private static func parseFatBinary(data: Data, isBigEndian: Bool) throws -> [MachOSlice] {
         guard data.count >= 8 else {
             throw ParseError.invalidFormat("Fat header too small")
@@ -144,7 +143,6 @@ public struct MachOParser: Sendable {
     }
 
     // MARK: - Single Slice Parsing
-
     private static func parseSingleSlice(data: Data, offset: Int, swapped: Bool, is64Bit: Bool) throws -> MachOSlice {
         let headerSize = is64Bit ? 32 : 28 // mach_header_64 vs mach_header
 
@@ -208,7 +206,6 @@ public struct MachOParser: Sendable {
     }
 
     // MARK: - Segment Parsing
-
     private static func parseSegment64(data: Data, offset: Int, swapped: Bool) -> MachOSegment? {
         // LC_SEGMENT_64 layout:
         // 0: cmd (4), 4: cmdsize (4), 8: segname (16), 24: vmaddr (8),
@@ -240,12 +237,13 @@ public struct MachOParser: Sendable {
             let sectName = self.readSegmentName(data: data, offset: sectOffset, length: 16)
             let sectSegName = self.readSegmentName(data: data, offset: sectOffset + 16, length: 16)
 
-            let sectSize = data.withUnsafeBytes { buf -> UInt64 in
+            let (sectSize, sectFileOffset) = data.withUnsafeBytes { buf -> (UInt64, UInt32) in
                 let s = buf.load(fromByteOffset: sectOffset + 40, as: UInt64.self)
-                return swapped ? s.byteSwapped : s
+                let fo = buf.load(fromByteOffset: sectOffset + 48, as: UInt32.self)
+                return swapped ? (s.byteSwapped, fo.byteSwapped) : (s, fo)
             }
 
-            sections.append(MachOSection(name: sectName, segmentName: sectSegName, size: sectSize))
+            sections.append(MachOSection(name: sectName, segmentName: sectSegName, size: sectSize, fileOffset: UInt64(sectFileOffset)))
             sectOffset += sectionSize
         }
 
@@ -253,7 +251,6 @@ public struct MachOParser: Sendable {
     }
 
     // MARK: - Dylib Command Parsing
-
     /// Parse a dylib load command (`LC_LOAD_DYLIB`, `LC_LOAD_WEAK_DYLIB`, `LC_REEXPORT_DYLIB`, `LC_LAZY_LOAD_DYLIB`).
     private static func parseDylibCommand(data: Data, offset: Int, cmdSize: Int, cmd: UInt32, swapped: Bool) -> DylibDependency? {
         let dylibType: DylibType
@@ -297,7 +294,6 @@ public struct MachOParser: Sendable {
     }
 
     // MARK: - Helpers
-
     private static func readSegmentName(data: Data, offset: Int, length: Int) -> String {
         guard offset + length <= data.count else { return "" }
         let nameData = data[offset ..< offset + length]

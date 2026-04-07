@@ -85,9 +85,13 @@ public struct MachOSection: Codable, Sendable {
     /// Size in bytes.
     public let size: UInt64
 
-    public init(name: String, segmentName: String, size: UInt64) {
+    /// File offset of this section's data within the binary.
+    public let fileOffset: UInt64
+
+    public init(name: String, segmentName: String, size: UInt64, fileOffset: UInt64 = 0) {
         self.name = name
         self.segmentName = segmentName
         self.size = size
+        self.fileOffset = fileOffset
     }
 }

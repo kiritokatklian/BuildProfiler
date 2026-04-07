@@ -12,14 +12,13 @@ import Foundation
 public struct InsightGenerator: Sendable {
     /// Generate all insights for the given bundle.
     public static func generate(from bundle: BundleInfo) -> [Insight] {
-        [
+        var insights = [
             duplicateFiles(bundle),
             looseImages(bundle),
             smallFiles(bundle),
             unnecessaryFiles(bundle),
             largeImages(bundle),
             largeVideos(bundle),
-            headerFiles(bundle),
             moduleMaps(bundle),
             stripDebugSymbols(bundle),
             unusedArchitectures(bundle),
@@ -27,7 +26,22 @@ public struct InsightGenerator: Sendable {
             imageOptimization(bundle),
             alternateIconOptimization(bundle),
             minifyStrings(bundle),
+            spmResourceBundles(bundle),
         ]
+
+        if let report = bundle.unusedResources {
+            insights.append(unusedResourcesInsight(report, totalSize: bundle.totalSize))
+        }
+
+        if let report = bundle.extensionReport {
+            insights.append(contentsOf: extensionInsights(report, totalSize: bundle.totalSize))
+        }
+
+        if let graph = bundle.dependencyGraph {
+            insights.append(contentsOf: dependencyGraphInsights(graph, totalSize: bundle.totalSize))
+        }
+
+        return insights
     }
 
     // MARK: - BundleInfo-Based Insights
@@ -147,22 +161,6 @@ public struct InsightGenerator: Sendable {
             id: "large-videos",
             title: "Large Videos",
             description: "Videos over 10 MB increase download size significantly. Stream them from a CDN or use more aggressive compression (HEVC).",
-            severity: severity(for: savings, total: bundle.totalSize),
-            savingsBytes: savings,
-            affectedFiles: matched.map {
-                InsightFile(path: $0.relativePath, size: $0.size, detail: nil)
-            }
-        )
-    }
-
-    private static func headerFiles(_ bundle: BundleInfo) -> Insight {
-        let matched = bundle.files.filter { $0.category == .header }
-        let savings = matched.reduce(UInt64(0)) { $0 + $1.size }
-
-        return Insight(
-            id: "header-files",
-            title: "Header Files",
-            description: "C/ObjC headers are only needed at compile time. Strip them from release builds with COPY_HEADERS_RUN_UNIFDEF or custom build phases.",
             severity: severity(for: savings, total: bundle.totalSize),
             savingsBytes: savings,
             affectedFiles: matched.map {
@@ -366,6 +364,129 @@ public struct InsightGenerator: Sendable {
                 InsightFile(path: $0.relativePath, size: $0.size, detail: nil)
             }
         )
+    }
+
+    // MARK: - SPM Insights
+    private static func spmResourceBundles(_ bundle: BundleInfo) -> Insight {
+        let largeBundles = bundle.spmPackages.flatMap(\.resourceBundles).filter { $0.totalSize > 1_048_576 }
+        let savings = largeBundles.reduce(UInt64(0)) { $0 + $1.totalSize }
+
+        return Insight(
+            id: "spm-resource-bundles",
+            title: "Large SPM Resource Bundles",
+            description: "SPM resource bundles over 1 MB may contain assets that could be optimized or loaded on demand.",
+            severity: savings > 0 ? severity(for: savings, total: bundle.totalSize) : .passing,
+            savingsBytes: savings,
+            affectedFiles: largeBundles.map {
+                InsightFile(path: $0.path, size: $0.totalSize, detail: "\($0.files.count) files")
+            }
+        )
+    }
+
+    // MARK: - Unused Resources Insight
+    private static func unusedResourcesInsight(_ report: UnusedResourceReport, totalSize: UInt64) -> Insight {
+        let savings = report.potentialSavings
+
+        return Insight(
+            id: "unused-resources",
+            title: "Potentially Unused Resources",
+            description: "Resources not referenced in any binary string table. Verify before removing — see limitations.",
+            severity: report.unusedResources.isEmpty ? .passing : severity(for: savings, total: totalSize),
+            savingsBytes: savings,
+            affectedFiles: report.unusedResources.map {
+                InsightFile(path: $0.relativePath, size: $0.fileSize, detail: "not found in any binary")
+            }
+        )
+    }
+
+    // MARK: - Extension Insights
+    private static func extensionInsights(_ report: ExtensionOverheadReport, totalSize: UInt64) -> [Insight] {
+        var insights: [Insight] = []
+
+        // Duplicated frameworks across extensions
+        if !report.duplicatedFrameworks.isEmpty {
+            let savings = report.potentialSavings
+
+            insights.append(Insight(
+                id: "extension-duplicated-frameworks",
+                title: "Duplicated Frameworks in Extensions",
+                description: "Frameworks embedded in both the main app and extensions are shipped multiple times. Use app groups or framework sharing to deduplicate.",
+                severity: severity(for: savings, total: totalSize),
+                savingsBytes: savings,
+                affectedFiles: report.duplicatedFrameworks.map {
+                    InsightFile(
+                        path: $0.name + ".framework",
+                        size: $0.potentialSavings,
+                        detail: $0.locations.joined(separator: ", ")
+                    )
+                }
+            ))
+        }
+
+        return insights
+    }
+
+    // MARK: - Dependency Graph Insights
+    private static func dependencyGraphInsights(_ graph: DependencyGraph, totalSize: UInt64) -> [Insight] {
+        var insights: [Insight] = []
+
+        // Redundant dependencies
+        let redundant = graph.edges.filter(\.isRedundant)
+        if !redundant.isEmpty {
+            insights.append(Insight(
+                id: "redundant-dependencies",
+                title: "Redundant Dependency Links",
+                description: "Some direct dependency links are redundant because the target is already reachable transitively. These don't add size but add launch-time overhead.",
+                severity: .info,
+                savingsBytes: 0,
+                affectedFiles: redundant.map {
+                    InsightFile(path: "\($0.from) -> \($0.to)", size: 0, detail: "redundant link")
+                }
+            ))
+        }
+
+        // Deep dependency chain contributing significant size
+        let chainSize = graph.heaviestChain.totalSize
+        if graph.heaviestChain.path.count > 2, chainSize > 0 {
+            let chainPct = Double(chainSize) / Double(totalSize)
+            if chainPct > 0.3 {
+                insights.append(Insight(
+                    id: "deep-dependency-chain",
+                    title: "Heavy Dependency Chain",
+                    description: "The heaviest dependency chain accounts for over 30% of binary size. Consider reducing transitive dependencies.",
+                    severity: .warning,
+                    savingsBytes: 0,
+                    affectedFiles: graph.heaviestChain.path.compactMap { name in
+                        guard let node = graph.nodes.first(where: { $0.name == name }),
+                              !node.isSystemLibrary else { return nil }
+                        return InsightFile(path: name, size: node.binarySize, detail: nil)
+                    }
+                ))
+            }
+        }
+
+        // Weak-link candidates: large embedded frameworks that could be lazy-loaded
+        let largeEmbedded = graph.nodes
+            .filter { $0.nodeType == .embeddedFramework && $0.binarySize > 1_048_576 }
+            .sorted { $0.binarySize > $1.binarySize }
+
+        let weakLinked = Set(graph.edges.filter { $0.linkType == .weak || $0.linkType == .lazy }.map(\.to))
+        let candidates = largeEmbedded.filter { !weakLinked.contains($0.name) }
+
+        if !candidates.isEmpty {
+            insights.append(Insight(
+                id: "weak-link-candidates",
+                title: "Weak-Link Candidates",
+                description: "Large frameworks linked with LC_LOAD_DYLIB could potentially use weak or lazy linking to defer load-time cost if not always needed.",
+                severity: .info,
+                savingsBytes: 0,
+                affectedFiles: candidates.prefix(10).map {
+                    InsightFile(path: $0.name + ".framework", size: $0.binarySize, detail: "currently strong-linked")
+                }
+            ))
+        }
+
+        return insights
     }
 
     // MARK: - Severity Helpers

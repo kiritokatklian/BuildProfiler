@@ -87,6 +87,57 @@ public struct TreeFormatter: Sendable {
             lines.append(contentsOf: self.formatDuplicates(bundle.duplicates))
         }
 
+        // SPM packages
+        if !bundle.spmPackages.isEmpty {
+            lines.append("")
+            lines.append("SPM PACKAGES")
+            lines.append(String(repeating: "-", count: Self.lineWidth))
+            lines.append(contentsOf: self.formatSPMPackages(bundle.spmPackages))
+        }
+
+        // Unused resources
+        if let report = bundle.unusedResources, !report.unusedResources.isEmpty {
+            lines.append("")
+            let savingsStr = "Potential savings: \(SizeFormatter.format(report.potentialSavings))"
+            let urHeader = "UNUSED RESOURCES"
+            let urPadding = max(0, Self.lineWidth - urHeader.count - savingsStr.count)
+            lines.append(urHeader + String(repeating: " ", count: urPadding) + savingsStr)
+            lines.append(String(repeating: "-", count: Self.lineWidth))
+            lines.append("  Scanned \(report.totalResourcesScanned) resources, found \(report.unusedResources.count) potentially unused")
+            lines.append("")
+            for resource in report.unusedResources.prefix(30) {
+                let size = SizeFormatter.padded(resource.fileSize)
+                lines.append("  \(size)  \(resource.relativePath)")
+            }
+            if report.unusedResources.count > 30 {
+                lines.append("  ... and \(report.unusedResources.count - 30) more")
+            }
+            lines.append("")
+            lines.append("  Limitations:")
+            for limitation in report.limitations {
+                lines.append("    - \(limitation)")
+            }
+        }
+
+        // App extensions
+        if let report = bundle.extensionReport {
+            lines.append("")
+            let extTotalStr = "Total: \(SizeFormatter.format(report.totalExtensionSize))"
+            let extHeader = "APP EXTENSIONS"
+            let extPadding = max(0, Self.lineWidth - extHeader.count - extTotalStr.count)
+            lines.append(extHeader + String(repeating: " ", count: extPadding) + extTotalStr)
+            lines.append(String(repeating: "-", count: Self.lineWidth))
+            lines.append(contentsOf: self.formatExtensions(report))
+        }
+
+        // Dependency graph
+        if let graph = bundle.dependencyGraph {
+            lines.append("")
+            lines.append("DEPENDENCY GRAPH")
+            lines.append(String(repeating: "-", count: Self.lineWidth))
+            lines.append(contentsOf: self.formatDependencyGraph(graph))
+        }
+
         // Top files
         let topCount = topN ?? 20
         lines.append("")
@@ -280,6 +331,132 @@ public struct TreeFormatter: Sendable {
             let wasted = "Wasted: \(SizeFormatter.format(group.wastedBytes))"
             return "  \(filename) (\(copies))    \(wasted)"
         }
+    }
+
+    private func formatSPMPackages(_ packages: [SPMPackageInfo]) -> [String] {
+        var lines: [String] = []
+        for pkg in packages {
+            let name = pkg.name.padding(toLength: 30, withPad: " ", startingAt: 0)
+            let total = SizeFormatter.padded(pkg.totalSize)
+            lines.append("  \(name) \(total)")
+
+            if let fw = pkg.dynamicFramework {
+                lines.append("    Framework:  \(SizeFormatter.format(fw.totalSize)) (binary: \(SizeFormatter.format(fw.binarySize)))")
+            }
+            for rb in pkg.resourceBundles {
+                lines.append("    Resources:  \(rb.name)  \(SizeFormatter.format(rb.totalSize))  (\(rb.files.count) files)")
+            }
+            for mod in pkg.swiftModules {
+                lines.append("    Module:     \(mod.moduleName)  \(SizeFormatter.format(mod.size))")
+            }
+        }
+        return lines
+    }
+
+    private func formatExtensions(_ report: ExtensionOverheadReport) -> [String] {
+        var lines: [String] = []
+        for ext in report.extensions {
+            let name = ext.name.padding(toLength: 30, withPad: " ", startingAt: 0)
+            let total = SizeFormatter.padded(ext.totalSize)
+            let exec = SizeFormatter.format(ext.executableSize)
+            lines.append("  \(name) \(total)    (executable: \(exec), \(ext.frameworks.count) frameworks)")
+        }
+
+        if !report.duplicatedFrameworks.isEmpty {
+            lines.append("")
+            let savings = SizeFormatter.format(report.potentialSavings)
+            lines.append("  DUPLICATED FRAMEWORKS (EXTENSION OVERHEAD)    Potential savings: \(savings)")
+            for dup in report.duplicatedFrameworks {
+                let name = dup.name.padding(toLength: 28, withPad: " ", startingAt: 0)
+                let size = SizeFormatter.format(dup.sizePerCopy)
+                let locs = dup.locations.joined(separator: ", ")
+                lines.append("    \(name) \(size) x \(dup.locations.count)    [\(locs)]")
+            }
+        }
+        return lines
+    }
+
+    private func formatDependencyGraph(_ graph: DependencyGraph) -> [String] {
+        var lines: [String] = []
+
+        // Build adjacency for tree display
+        let edgeMap = Dictionary(grouping: graph.edges, by: \.from)
+        let nodeMap = Dictionary(graph.nodes.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+
+        // Count system libs
+        let systemCount = graph.nodes.filter(\.isSystemLibrary).count
+        let embeddedCount = graph.nodes.filter { $0.nodeType == .embeddedFramework }.count
+
+        lines.append("  Root: \(graph.rootNode)    Depth: \(graph.maxDepth)    Embedded: \(embeddedCount)    System: \(systemCount)")
+        lines.append("")
+
+        // Print tree from root
+        func printTree(name: String, indent: String, isLast: Bool, visited: inout Set<String>) {
+            let node = nodeMap[name]
+            let prefix = indent + (isLast ? "\\-- " : "|-- ")
+            let size = node.map { SizeFormatter.format($0.binarySize) } ?? ""
+            let tags = edgeMap[graph.rootNode]?.first(where: { $0.to == name }).map { edge -> String in
+                var t: [String] = []
+                if edge.linkType == .weak { t.append("[weak]") }
+                if edge.linkType == .lazy { t.append("[lazy]") }
+                if edge.isRedundant { t.append("[redundant]") }
+                return t.joined(separator: " ")
+            } ?? ""
+            let tagStr = tags.isEmpty ? "" : "  \(tags)"
+
+            if node?.isSystemLibrary == true {
+                // Don't recurse into system libs
+                lines.append("  \(prefix)\(name)  \(size)\(tagStr)")
+                return
+            }
+
+            guard visited.insert(name).inserted else {
+                lines.append("  \(prefix)\(name)  (circular ref)")
+                return
+            }
+
+            lines.append("  \(prefix)\(name)  \(size)\(tagStr)")
+
+            let deps = edgeMap[name] ?? []
+            let nonSystem = deps.filter { nodeMap[$0.to]?.isSystemLibrary != true }
+            let systemDeps = deps.filter { nodeMap[$0.to]?.isSystemLibrary == true }
+
+            for (idx, dep) in nonSystem.enumerated() {
+                let last = idx == nonSystem.count - 1 && systemDeps.isEmpty
+                let nextIndent = indent + (isLast ? "    " : "|   ")
+                printTree(name: dep.to, indent: nextIndent, isLast: last, visited: &visited)
+            }
+
+            if !systemDeps.isEmpty {
+                let nextIndent = indent + (isLast ? "    " : "|   ")
+                lines.append("  \(nextIndent)\\-- (\(systemDeps.count) system libraries)")
+            }
+
+            visited.remove(name)
+        }
+
+        let rootDeps = edgeMap[graph.rootNode] ?? []
+        let nonSystemRoot = rootDeps.filter { nodeMap[$0.to]?.isSystemLibrary != true }
+        let systemRoot = rootDeps.filter { nodeMap[$0.to]?.isSystemLibrary == true }
+        var visited: Set<String> = [graph.rootNode]
+
+        lines.append("  \(graph.rootNode)")
+        for (idx, dep) in nonSystemRoot.enumerated() {
+            let last = idx == nonSystemRoot.count - 1 && systemRoot.isEmpty
+            printTree(name: dep.to, indent: "", isLast: last, visited: &visited)
+        }
+        if !systemRoot.isEmpty {
+            lines.append("  \\-- (\(systemRoot.count) system libraries)")
+        }
+
+        // Heaviest chain
+        if graph.heaviestChain.path.count > 1 {
+            lines.append("")
+            lines.append("  Heaviest Chain: \(SizeFormatter.format(graph.heaviestChain.totalSize))")
+            lines.append("    \(graph.heaviestChain.path.joined(separator: " -> "))")
+        }
+
+        return lines
     }
 
     private func formatTopFiles(files: [FileEntry], count: Int) -> [String] {

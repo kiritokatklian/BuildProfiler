@@ -52,9 +52,11 @@ public struct HTMLFormatter: Sendable {
         <div id="treemap"></div>
         <div id="tooltip"></div>
         <div id="insights"></div>
+        <div id="dependency-graph"></div>
         <script>
         const DATA = \(jsonString);
         const INSIGHTS = \(insightsJSON);
+        const DEP_GRAPH = \(try buildDependencyGraphJSON(from: bundle));
         \(javascript)
         </script>
         </body>
@@ -63,7 +65,6 @@ public struct HTMLFormatter: Sendable {
     }
 
     // MARK: - Insights JSON
-
     private func buildInsightsJSON(from bundle: BundleInfo) throws -> String {
         let insights = InsightGenerator.generate(from: bundle)
         let encoder = JSONEncoder()
@@ -73,7 +74,6 @@ public struct HTMLFormatter: Sendable {
     }
 
     // MARK: - Tree Building
-
     private func buildTreeJSON(from bundle: BundleInfo) -> [String: Any] {
         let files = bundle.files
         let bundleName = bundle.bundleName
@@ -143,6 +143,16 @@ public struct HTMLFormatter: Sendable {
             root = injectFrameworkComposition(into: root, lookup: frameworkLookup)
         }
 
+        // Post-processing: inject SPM package grouping
+        if !bundle.spmPackages.isEmpty {
+            root = injectSPMPackages(into: root, packages: bundle.spmPackages)
+        }
+
+        // Post-processing: inject extension composition
+        if let extReport = bundle.extensionReport, !extReport.extensions.isEmpty {
+            root = injectExtensionComposition(into: root, extensions: extReport.extensions)
+        }
+
         return root
     }
 
@@ -188,7 +198,6 @@ public struct HTMLFormatter: Sendable {
     }
 
     // MARK: - Asset Catalog Injection
-
     private func injectAssetCatalogs(
         into node: [String: Any],
         currentPath: String,
@@ -244,7 +253,6 @@ public struct HTMLFormatter: Sendable {
     }
 
     // MARK: - Framework Composition Injection
-
     private func injectFrameworkComposition(
         into node: [String: Any],
         lookup: [String: FrameworkInfo]
@@ -329,8 +337,148 @@ public struct HTMLFormatter: Sendable {
         return node
     }
 
-    // MARK: - HTML Escaping
+    // MARK: - Dependency Graph JSON
+    private func buildDependencyGraphJSON(from bundle: BundleInfo) throws -> String {
+        guard let graph = bundle.dependencyGraph else { return "null" }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let data = try encoder.encode(graph)
+        return String(data: data, encoding: .utf8) ?? "null"
+    }
 
+    // MARK: - SPM Package Injection
+    private func injectSPMPackages(into root: [String: Any], packages: [SPMPackageInfo]) -> [String: Any] {
+        // Add a virtual "SPM Packages" grouping that attributes sizes to packages
+        guard var rootChildren = root["children"] as? [[String: Any]] else { return root }
+
+        var spmChildren: [[String: Any]] = []
+        for pkg in packages {
+            var pkgChildren: [[String: Any]] = []
+
+            if let fw = pkg.dynamicFramework {
+                pkgChildren.append([
+                    "name": "\(fw.name).framework",
+                    "size": fw.totalSize,
+                    "category": FileCategory.framework.rawValue,
+                ] as [String: Any])
+            }
+
+            for rb in pkg.resourceBundles {
+                pkgChildren.append([
+                    "name": rb.name + ".bundle",
+                    "size": rb.totalSize,
+                    "category": FileCategory.other.rawValue,
+                ] as [String: Any])
+            }
+
+            for mod in pkg.swiftModules {
+                pkgChildren.append([
+                    "name": mod.moduleName + ".swiftmodule",
+                    "size": mod.size,
+                    "category": FileCategory.other.rawValue,
+                ] as [String: Any])
+            }
+
+            if !pkgChildren.isEmpty {
+                spmChildren.append([
+                    "name": pkg.name,
+                    "size": pkg.totalSize,
+                    "children": pkgChildren,
+                ] as [String: Any])
+            }
+        }
+
+        if !spmChildren.isEmpty {
+            let totalSPM = packages.reduce(UInt64(0)) { $0 + $1.totalSize }
+            rootChildren.append([
+                "name": "(SPM Packages)",
+                "size": totalSPM,
+                "children": spmChildren,
+            ] as [String: Any])
+        }
+
+        var updated = root
+        updated["children"] = rootChildren
+        return updated
+    }
+
+    // MARK: - Extension Composition Injection
+    private func injectExtensionComposition(
+        into root: [String: Any],
+        extensions: [AppExtensionInfo]
+    ) -> [String: Any] {
+        guard var rootChildren = root["children"] as? [[String: Any]] else { return root }
+
+        // Find and enhance the PlugIns directory node
+        rootChildren = rootChildren.map { child in
+            let name = child["name"] as? String ?? ""
+            guard name == "PlugIns", var children = child["children"] as? [[String: Any]] else {
+                return child
+            }
+
+            let extLookup = Dictionary(
+                extensions.map { ($0.name + ".appex", $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+
+            children = children.map { appexNode in
+                let appexName = appexNode["name"] as? String ?? ""
+                guard let ext = extLookup[appexName] else { return appexNode }
+
+                var structuredChildren: [[String: Any]] = []
+
+                // Executable
+                if ext.executableSize > 0 {
+                    structuredChildren.append([
+                        "name": ext.name,
+                        "size": ext.executableSize,
+                        "category": FileCategory.executable.rawValue,
+                    ] as [String: Any])
+                }
+
+                // Frameworks
+                if !ext.frameworks.isEmpty {
+                    let fwChildren: [[String: Any]] = ext.frameworks.map { fw in
+                        [
+                            "name": fw.name + ".framework",
+                            "size": fw.totalSize,
+                            "category": FileCategory.framework.rawValue,
+                        ] as [String: Any]
+                    }
+                    let fwTotal = ext.frameworks.reduce(UInt64(0)) { $0 + $1.totalSize }
+                    structuredChildren.append([
+                        "name": "Frameworks",
+                        "size": fwTotal,
+                        "children": fwChildren,
+                    ] as [String: Any])
+                }
+
+                // Resources (remaining size)
+                let accounted = ext.executableSize + ext.frameworks.reduce(UInt64(0)) { $0 + $1.totalSize }
+                if ext.totalSize > accounted {
+                    structuredChildren.append([
+                        "name": "Resources",
+                        "size": ext.totalSize - accounted,
+                        "category": FileCategory.other.rawValue,
+                    ] as [String: Any])
+                }
+
+                var updated = appexNode
+                updated["children"] = structuredChildren
+                return updated
+            }
+
+            var updated = child
+            updated["children"] = children
+            return updated
+        }
+
+        var updated = root
+        updated["children"] = rootChildren
+        return updated
+    }
+
+    // MARK: - HTML Escaping
     private func escapeHTML(_ string: String) -> String {
         string
             .replacingOccurrences(of: "&", with: "&amp;")
@@ -340,7 +488,6 @@ public struct HTMLFormatter: Sendable {
     }
 
     // MARK: - Resource Loading
-
     private enum ResourceError: Error, CustomStringConvertible {
         case missingResource(name: String, extension: String)
 

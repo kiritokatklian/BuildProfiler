@@ -138,6 +138,7 @@ const breadcrumb = document.getElementById('breadcrumb');
 const tooltip = document.getElementById('tooltip');
 const searchResults = document.getElementById('search-results');
 let viewMode = 'treemap';
+let hoveredEl = null;
 const MAX_DEPTH = 3;
 
 assignColors(DATA);
@@ -170,7 +171,7 @@ function applyOverflow(rects, w, h) {
   if (overflow.length === 0) return rects;
   const overflowSize = overflow.reduce((s, r) => s + r.node.size, 0);
   const syntheticNode = {
-    name: '\u2026 and ' + overflow.length + ' more',
+    name: 'Other (' + overflow.length + ' items)',
     size: overflowSize,
     children: overflow.map(r => r.node),
     _isOverflow: true,
@@ -210,7 +211,13 @@ function renderNode(node, parentEl, x, y, w, h, depth, parentNode) {
 
   el.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (node.children && node.children.length > 0) {
+    if (node._isOverflow && parentNode) {
+      // Overflow nodes: re-render the parent so all items are visible
+      pathStack.push(currentNode);
+      currentNode = parentNode;
+      render(currentNode);
+      renderBreadcrumb();
+    } else if (node.children && node.children.length > 0) {
       pathStack.push(currentNode);
       currentNode = node;
       render(currentNode);
@@ -225,6 +232,9 @@ function renderNode(node, parentEl, x, y, w, h, depth, parentNode) {
 
   el.addEventListener('mouseenter', (e) => {
     e.stopPropagation();
+    if (hoveredEl && hoveredEl !== el) hoveredEl.classList.remove('hovered');
+    hoveredEl = el;
+    el.classList.add('hovered');
     tooltip.style.display = 'block';
     let html = '<div class="tt-name">' + escapeHTML(node.name) + '</div>';
     html += '<div class="tt-size">' + formatSize(node.size) + '</div>';
@@ -244,13 +254,14 @@ function renderNode(node, parentEl, x, y, w, h, depth, parentNode) {
 
   el.addEventListener('mouseleave', (e) => {
     e.stopPropagation();
+    el.classList.remove('hovered');
     tooltip.style.display = 'none';
   });
 
   parentEl.appendChild(el);
 
   if (node.children && node.children.length > 0 && depth < MAX_DEPTH) {
-    const headerH = (h > 30 && w > 40) ? 18 : 0;
+    const headerH = (h > 44 && w > 40) ? 32 : (h > 30 && w > 40) ? 18 : 0;
     const pad = 2;
     const innerW = w - 2 * pad;
     const innerH = h - headerH - 2 * pad;
@@ -277,7 +288,7 @@ function darkenColor(hex, amount) {
 
 function renderBreadcrumb() {
   breadcrumb.innerHTML = '';
-  const all = [...pathStack, currentNode];
+  const all = [...pathStack, currentNode].filter(n => !n._isOverflow);
   all.forEach((node, i) => {
     if (i > 0) {
       const sep = document.createElement('span');
@@ -655,7 +666,13 @@ function renderInsights() {
     '</span>';
   el.appendChild(header);
 
-  const sorted = [...INSIGHTS].sort((a, b) => b.savingsBytes - a.savingsBytes);
+  const severityOrder = { critical: 0, warning: 1, info: 2, passing: 3 };
+  const sorted = [...INSIGHTS].sort((a, b) => {
+    const sa = severityOrder[a.severity] ?? 4;
+    const sb = severityOrder[b.severity] ?? 4;
+    if (sa !== sb) return sa - sb;
+    return b.savingsBytes - a.savingsBytes;
+  });
   for (const insight of sorted) {
     const card = document.createElement('div');
     card.className = 'insight-card ' + insight.severity;
@@ -670,7 +687,7 @@ function renderInsights() {
       '</div>' +
       '<div class="insight-desc">' + escapeHTML(insight.description) + '</div>';
 
-    if (insight.severity !== 'passing') {
+    if (insight.severity !== 'passing' && insight.savingsBytes > 0) {
       html += '<div class="insight-savings">Potential savings: <strong>' +
         formatSize(insight.savingsBytes) + '</strong> (' + savingsPct + '%)</div>';
     }
@@ -709,6 +726,173 @@ function renderInsights() {
 }
 
 renderInsights();
+
+// Dependency Graph
+function renderDepGraph() {
+  if (!DEP_GRAPH) return;
+  const el = document.getElementById('dependency-graph');
+  if (!el) return;
+
+  const header = document.createElement('div');
+  header.id = 'dep-graph-header';
+  const embedded = DEP_GRAPH.nodes.filter(n => n.nodeType === 'embeddedFramework').length;
+  const spmCount = DEP_GRAPH.nodes.filter(n => n.nodeType === 'spmPackage').length;
+  const system = DEP_GRAPH.nodes.filter(n => n.isSystemLibrary).length;
+  const parts = [];
+  if (embedded > 0) parts.push(embedded + ' embedded framework' + (embedded !== 1 ? 's' : ''));
+  if (spmCount > 0) parts.push(spmCount + ' SPM package' + (spmCount !== 1 ? 's' : ''));
+  if (system > 0) parts.push(system + ' system librar' + (system !== 1 ? 'ies' : 'y'));
+  parts.push('depth ' + DEP_GRAPH.maxDepth);
+  header.innerHTML =
+    '<h2>Dependency Graph</h2>' +
+    '<span class="dep-graph-summary">' + parts.join(' \u00B7 ') + '</span>';
+  el.appendChild(header);
+
+  // Build adjacency
+  const edgeMap = {};
+  for (const edge of DEP_GRAPH.edges) {
+    if (!edgeMap[edge.from]) edgeMap[edge.from] = [];
+    edgeMap[edge.from].push(edge);
+  }
+  const nodeMap = {};
+  for (const node of DEP_GRAPH.nodes) nodeMap[node.name] = node;
+
+  // Build tree
+  const tree = document.createElement('div');
+  tree.className = 'dep-tree';
+
+  function buildTreeNode(name, visited) {
+    const node = nodeMap[name];
+    if (!node) return null;
+    const li = document.createElement('div');
+    li.className = 'dep-node' + (node.isSystemLibrary ? ' system' : '') + (node.nodeType === 'spmPackage' ? ' spm' : '');
+
+    const label = document.createElement('span');
+    label.className = 'dep-label';
+    label.textContent = name + (node.nodeType === 'spmPackage' ? ' (SPM)' : '');
+    li.appendChild(label);
+
+    if (node.binarySize > 0) {
+      const sz = document.createElement('span');
+      sz.className = 'dep-size';
+      sz.textContent = formatSize(node.binarySize);
+      li.appendChild(sz);
+    } else if (node.nodeType === 'spmPackage') {
+      const sz = document.createElement('span');
+      sz.className = 'dep-size';
+      sz.textContent = '(statically linked)';
+      li.appendChild(sz);
+    }
+
+    const edges = edgeMap[name] || [];
+    const deps = edges.filter(e => !nodeMap[e.to]?.isSystemLibrary);
+    const sysDeps = edges.filter(e => nodeMap[e.to]?.isSystemLibrary);
+
+    if (deps.length > 0 && !visited.has(name)) {
+      visited.add(name);
+      const toggle = document.createElement('span');
+      toggle.className = 'dep-toggle';
+      toggle.textContent = '\u25BC';
+      li.insertBefore(toggle, label);
+
+      const children = document.createElement('div');
+      children.className = 'dep-children';
+
+      for (const edge of deps) {
+        const tags = [];
+        if (edge.linkType === 'weak') tags.push('[weak]');
+        if (edge.linkType === 'lazy') tags.push('[lazy]');
+        if (edge.isRedundant) tags.push('[redundant]');
+
+        const child = buildTreeNode(edge.to, new Set(visited));
+        if (child) {
+          if (tags.length > 0) {
+            const tagSpan = document.createElement('span');
+            tagSpan.className = 'dep-tag';
+            tagSpan.textContent = ' ' + tags.join(' ');
+            child.insertBefore(tagSpan, child.children[child.children.length - 1]);
+          }
+          children.appendChild(child);
+        }
+      }
+
+      if (sysDeps.length > 0) {
+        for (const edge of sysDeps) {
+          const sysNode = document.createElement('div');
+          sysNode.className = 'dep-node system';
+          const sysName = edge.to;
+          let tagStr = '';
+          if (edge.linkType === 'weak') tagStr = ' <span class="dep-tag">[weak]</span>';
+          if (edge.linkType === 'lazy') tagStr = ' <span class="dep-tag">[lazy]</span>';
+          sysNode.innerHTML = '<span class="dep-label">' + escapeHTML(sysName) + '</span>' + tagStr;
+          children.appendChild(sysNode);
+        }
+      }
+
+      li.appendChild(children);
+
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = children.style.display !== 'none';
+        children.style.display = open ? 'none' : 'block';
+        toggle.textContent = open ? '\u25B6' : '\u25BC';
+      });
+
+      visited.delete(name);
+    } else if (sysDeps.length > 0) {
+      // Leaf node with only system deps — show them inline
+      const sysToggle = document.createElement('span');
+      sysToggle.className = 'dep-toggle';
+      sysToggle.textContent = '\u25B6';
+      li.insertBefore(sysToggle, label);
+
+      const sysChildren = document.createElement('div');
+      sysChildren.className = 'dep-children';
+      sysChildren.style.display = 'none';
+      for (const edge of sysDeps) {
+        const sysNode = document.createElement('div');
+        sysNode.className = 'dep-node system';
+        sysNode.innerHTML = '<span class="dep-label">' + escapeHTML(edge.to) + '</span>';
+        sysChildren.appendChild(sysNode);
+      }
+      li.appendChild(sysChildren);
+
+      sysToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = sysChildren.style.display !== 'none';
+        sysChildren.style.display = open ? 'none' : 'block';
+        sysToggle.textContent = open ? '\u25B6' : '\u25BC';
+      });
+    }
+
+    return li;
+  }
+
+  const rootNode = buildTreeNode(DEP_GRAPH.rootNode, new Set());
+  if (rootNode) tree.appendChild(rootNode);
+
+  el.appendChild(tree);
+
+  // Heaviest chain
+  if (DEP_GRAPH.heaviestChain && DEP_GRAPH.heaviestChain.path.length >= 1 && DEP_GRAPH.nodes.filter(n => !n.isSystemLibrary).length > 1) {
+    const chain = document.createElement('div');
+    chain.className = 'dep-chain';
+    const chainPct = DATA.size > 0
+      ? ((DEP_GRAPH.heaviestChain.totalSize / DATA.size) * 100).toFixed(1) : '0';
+    chain.innerHTML =
+      '<strong>Heaviest Dependency Chain</strong> \u2014 ' +
+      formatSize(DEP_GRAPH.heaviestChain.totalSize) +
+      ' (' + chainPct + '% of bundle)' +
+      '<br><code>' + DEP_GRAPH.heaviestChain.path.join(' \u2192 ') + '</code>' +
+      '<div class="dep-chain-desc">The longest chain of non-system dependencies by cumulative size. ' +
+      'A heavy chain means a single dependency pulls in significant transitive weight. ' +
+      'To reduce: replace heavy leaf dependencies with lighter alternatives, split large frameworks, ' +
+      'or lazy-load frameworks that aren\u2019t needed at launch.</div>';
+    el.appendChild(chain);
+  }
+}
+
+renderDepGraph();
 window.addEventListener('resize', () => render(currentNode));
 render(currentNode);
 renderBreadcrumb();

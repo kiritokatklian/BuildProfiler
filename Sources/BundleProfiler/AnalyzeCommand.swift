@@ -39,11 +39,15 @@ struct AnalyzeCommand: ParsableCommand {
     @Flag(name: .long, inversion: .prefixedNo, help: "Detect duplicate resources.")
     var duplicates: Bool = true
 
+    @Flag(name: .long, help: "Detect potentially unused resources by scanning binary strings.")
+    var unusedResources: Bool = false
+
     func run() throws {
         let resolvedPath = resolvePath(path)
         let options = BundleAnalyzer.Options(
             analyzeMachO: self.machO,
             detectDuplicates: self.duplicates,
+            detectUnusedResources: self.unusedResources,
             topN: self.top
         )
 

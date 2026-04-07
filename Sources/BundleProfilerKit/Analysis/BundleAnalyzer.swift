@@ -14,11 +14,13 @@ public struct BundleAnalyzer: Sendable {
     public struct Options: Sendable {
         public var analyzeMachO: Bool
         public var detectDuplicates: Bool
+        public var detectUnusedResources: Bool
         public var topN: Int?
 
-        public init(analyzeMachO: Bool = true, detectDuplicates: Bool = true, topN: Int? = nil) {
+        public init(analyzeMachO: Bool = true, detectDuplicates: Bool = true, detectUnusedResources: Bool = false, topN: Int? = nil) {
             self.analyzeMachO = analyzeMachO
             self.detectDuplicates = detectDuplicates
+            self.detectUnusedResources = detectUnusedResources
             self.topN = topN
         }
     }
@@ -108,6 +110,56 @@ public struct BundleAnalyzer: Sendable {
         // Analyze asset catalogs
         let assetCatalogs = self.analyzeAssetCatalogs(bundlePath: appPath, files: files)
 
+        // Detect SPM packages
+        let spmPackages = SPMPackageDetector.detect(
+            files: files,
+            frameworks: frameworks,
+            bundlePath: appPath
+        )
+
+        // Detect unused resources (opt-in, requires Mach-O)
+        let unusedResources: UnusedResourceReport?
+        if self.options.detectUnusedResources, self.options.analyzeMachO {
+            let execName = (bundleName as NSString).deletingPathExtension
+            let mainExecPath = appPath + "/" + execName
+            let mainExecExists = fileManager.fileExists(atPath: mainExecPath)
+
+            let frameworkBinaries: [(path: String, machO: MachOInfo)] = frameworks.compactMap { fw in
+                guard let machO = fw.machOInfo else { return nil }
+                let path = appPath + "/Frameworks/" + fw.name + ".framework/" + fw.name
+                return (path, machO)
+            }
+
+            unusedResources = UnusedResourceDetector.detect(
+                files: files,
+                assetCatalogs: assetCatalogs,
+                mainExecutablePath: mainExecExists ? mainExecPath : nil,
+                mainExecutableMachO: mainExecutable,
+                frameworkBinaries: frameworkBinaries
+            )
+        } else {
+            unusedResources = nil
+        }
+
+        // Analyze app extensions
+        let extensionReport = AppExtensionAnalyzer.analyze(
+            bundlePath: appPath,
+            mainFrameworks: frameworks,
+            analyzeMachO: self.options.analyzeMachO
+        )
+
+        // Build dependency graph
+        let dependencyGraph: DependencyGraph?
+        if self.options.analyzeMachO {
+            dependencyGraph = DependencyGraphBuilder.build(
+                mainExecutable: mainExecutable,
+                frameworks: frameworks,
+                spmPackages: spmPackages
+            )
+        } else {
+            dependencyGraph = nil
+        }
+
         return BundleInfo(
             bundleName: bundleName,
             totalSize: totalSize,
@@ -116,12 +168,15 @@ public struct BundleAnalyzer: Sendable {
             mainExecutable: mainExecutable,
             frameworks: frameworks,
             duplicates: duplicates,
-            assetCatalogs: assetCatalogs
+            assetCatalogs: assetCatalogs,
+            spmPackages: spmPackages,
+            unusedResources: unusedResources,
+            extensionReport: extensionReport,
+            dependencyGraph: dependencyGraph
         )
     }
 
     // MARK: - Main Executable
-
     private func findAndParseMainExecutable(bundlePath: String, bundleName: String) -> MachOInfo? {
         let execName = (bundleName as NSString).deletingPathExtension
         let execPath = bundlePath + "/" + execName
@@ -132,7 +187,6 @@ public struct BundleAnalyzer: Sendable {
     }
 
     // MARK: - Frameworks
-
     private func analyzeFrameworks(bundlePath: String, files: [FileEntry]) -> [FrameworkInfo] {
         let frameworksDir = bundlePath + "/Frameworks"
         let fileManager = FileManager.default
@@ -194,7 +248,6 @@ public struct BundleAnalyzer: Sendable {
     }
 
     // MARK: - Asset Catalogs
-
     private func analyzeAssetCatalogs(bundlePath: String, files: [FileEntry]) -> [AssetCatalogInfo] {
         files
             .filter { $0.category == .assetCatalog }

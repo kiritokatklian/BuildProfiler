@@ -13,7 +13,6 @@ public struct MarkdownFormatter: Sendable {
     public init() {}
 
     // MARK: - Budget Result
-
     /// Format a budget check result as Markdown.
     public func format(budget: BudgetResult) -> String {
         var lines: [String] = []
@@ -50,7 +49,6 @@ public struct MarkdownFormatter: Sendable {
     }
 
     // MARK: - Bundle Analysis
-
     /// Format a bundle analysis as Markdown.
     public func format(bundle: BundleInfo) -> String {
         var lines: [String] = []
@@ -132,11 +130,100 @@ public struct MarkdownFormatter: Sendable {
             lines.append("")
         }
 
+        // SPM Packages
+        if !bundle.spmPackages.isEmpty {
+            lines.append("### SPM Packages")
+            lines.append("")
+            lines.append("| Package | Total | Framework | Resources | Modules |")
+            lines.append("|---------|-------|-----------|-----------|---------|")
+            for pkg in bundle.spmPackages {
+                let fwSize = pkg.dynamicFramework.map { SizeFormatter.format($0.totalSize) } ?? "-"
+                let resSize = pkg.resourceBundles.isEmpty ? "-" : SizeFormatter.format(pkg.resourceBundles.reduce(0) { $0 + $1.totalSize })
+                let modSize = pkg.swiftModules.isEmpty ? "-" : SizeFormatter.format(pkg.swiftModules.reduce(0) { $0 + $1.size })
+                lines.append("| \(pkg.name) | \(SizeFormatter.format(pkg.totalSize)) | \(fwSize) | \(resSize) | \(modSize) |")
+            }
+            lines.append("")
+        }
+
+        // Unused Resources
+        if let report = bundle.unusedResources, !report.unusedResources.isEmpty {
+            lines.append("### Unused Resources")
+            lines.append("")
+            lines.append("**Potential savings:** \(SizeFormatter.format(report.potentialSavings)) (\(report.unusedResources.count) of \(report.totalResourcesScanned) resources)")
+            lines.append("")
+            lines.append("| Resource | Size | Category |")
+            lines.append("|----------|------|----------|")
+            for resource in report.unusedResources.prefix(30) {
+                lines.append("| \(resource.relativePath) | \(SizeFormatter.format(resource.fileSize)) | \(resource.category.displayName) |")
+            }
+            if report.unusedResources.count > 30 {
+                lines.append("")
+                lines.append("*... and \(report.unusedResources.count - 30) more*")
+            }
+            lines.append("")
+            lines.append("> **Limitations:** \(report.limitations.joined(separator: ". "))")
+            lines.append("")
+        }
+
+        // App Extensions
+        if let report = bundle.extensionReport {
+            lines.append("### App Extensions")
+            lines.append("")
+            lines.append("**Total extension size:** \(SizeFormatter.format(report.totalExtensionSize))")
+            lines.append("")
+            lines.append("| Extension | Size | Executable | Frameworks |")
+            lines.append("|-----------|------|------------|------------|")
+            for ext in report.extensions {
+                lines.append("| \(ext.name) | \(SizeFormatter.format(ext.totalSize)) | \(SizeFormatter.format(ext.executableSize)) | \(ext.frameworks.count) |")
+            }
+            lines.append("")
+
+            if !report.duplicatedFrameworks.isEmpty {
+                lines.append("#### Duplicated Frameworks")
+                lines.append("")
+                lines.append("**Potential savings:** \(SizeFormatter.format(report.potentialSavings))")
+                lines.append("")
+                lines.append("| Framework | Size/Copy | Copies | Locations | Savings |")
+                lines.append("|-----------|----------|--------|-----------|---------|")
+                for dup in report.duplicatedFrameworks {
+                    lines.append("| \(dup.name) | \(SizeFormatter.format(dup.sizePerCopy)) | \(dup.locations.count) | \(dup.locations.joined(separator: ", ")) | \(SizeFormatter.format(dup.potentialSavings)) |")
+                }
+                lines.append("")
+            }
+        }
+
+        // Dependency Graph
+        if let graph = bundle.dependencyGraph {
+            let embedded = graph.nodes.filter { $0.nodeType == .embeddedFramework }
+            lines.append("### Dependency Graph")
+            lines.append("")
+            lines.append("| Binary | Dependencies | Size | Type |")
+            lines.append("|--------|-------------|------|------|")
+            let edgeMap = Dictionary(grouping: graph.edges, by: \.from)
+            for node in graph.nodes where !node.isSystemLibrary {
+                let depCount = edgeMap[node.name]?.count ?? 0
+                lines.append("| \(node.name) | \(depCount) | \(SizeFormatter.format(node.binarySize)) | \(node.nodeType.rawValue) |")
+            }
+            lines.append("")
+
+            if graph.heaviestChain.path.count > 1 {
+                lines.append("#### Heaviest Dependency Chain")
+                lines.append("")
+                lines.append("**\(SizeFormatter.format(graph.heaviestChain.totalSize))** — \(graph.heaviestChain.path.joined(separator: " -> "))")
+                lines.append("")
+            }
+
+            if !embedded.isEmpty {
+                let systemCount = graph.nodes.filter(\.isSystemLibrary).count
+                lines.append("*\(embedded.count) embedded frameworks, \(systemCount) system libraries, max depth \(graph.maxDepth)*")
+                lines.append("")
+            }
+        }
+
         return lines.joined(separator: "\n")
     }
 
     // MARK: - Comparison
-
     /// Format a comparison result as Markdown.
     public func format(comparison: ComparisonResult) -> String {
         var lines: [String] = []
