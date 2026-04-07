@@ -33,6 +33,9 @@ struct CheckCommand: ParsableCommand {
     @Option(name: .long, help: "Output format: tree (default), json, or markdown.")
     var format: OutputFormat = .tree
 
+    @Option(name: .shortAndLong, help: "Write output to a file instead of stdout.")
+    var output: String?
+
     func run() throws {
         let resolvedPath = resolvePath(path)
 
@@ -54,53 +57,58 @@ struct CheckCommand: ParsableCommand {
             categoryBreakdown: bundle.categoryBreakdown
         )
 
+        let content: String
         switch self.format {
         case .tree:
-            self.printTreeOutput(result)
+            content = self.treeOutput(result)
         case .json:
-            try self.printJSONOutput(result)
+            content = try self.jsonOutput(result)
         case .markdown:
             let formatter = MarkdownFormatter()
-            print(formatter.format(budget: result))
+            content = formatter.format(budget: result)
         case .html:
-            self.printTreeOutput(result)
+            content = self.treeOutput(result)
         }
+
+        try writeOutput(content, to: self.output)
 
         if result.isOverBudget {
             throw ExitCode(1)
         }
     }
 
-    private func printTreeOutput(_ result: BudgetResult) {
+    private func treeOutput(_ result: BudgetResult) -> String {
+        var lines: [String] = []
         let status = result.isOverBudget ? "OVER BUDGET" : "UNDER BUDGET"
-        print("BUNDLE SIZE CHECK: \(status)")
-        print(String(repeating: "=", count: 60))
-        print("  Bundle:     \(result.bundleName)")
-        print("  Total Size: \(SizeFormatter.format(result.totalSize))")
-        print("  Budget:     \(SizeFormatter.format(result.budget))")
-        print("  Delta:      \(SizeFormatter.formatDelta(result.delta))")
-        print("")
+        lines.append("BUNDLE SIZE CHECK: \(status)")
+        lines.append(String(repeating: "=", count: 60))
+        lines.append("  Bundle:     \(result.bundleName)")
+        lines.append("  Total Size: \(SizeFormatter.format(result.totalSize))")
+        lines.append("  Budget:     \(SizeFormatter.format(result.budget))")
+        lines.append("  Delta:      \(SizeFormatter.formatDelta(result.delta))")
+        lines.append("")
 
         let sorted = result.categoryBreakdown.sorted { $0.value > $1.value }
         if !sorted.isEmpty {
-            print("CATEGORY BREAKDOWN")
-            print(String(repeating: "-", count: 60))
+            lines.append("CATEGORY BREAKDOWN")
+            lines.append(String(repeating: "-", count: 60))
             for (category, size) in sorted {
                 let name = category.displayName.padding(toLength: 22, withPad: " ", startingAt: 0)
                 let sizeStr = SizeFormatter.padded(size)
                 let pct = result.totalSize > 0
                     ? SizeFormatter.formatPercentage(Double(size) / Double(result.totalSize))
                     : "0.0%"
-                print("  \(name) \(sizeStr)  \(pct)")
+                lines.append("  \(name) \(sizeStr)  \(pct)")
             }
         }
-        print("")
+        lines.append("")
+        return lines.joined(separator: "\n")
     }
 
-    private func printJSONOutput(_ result: BudgetResult) throws {
+    private func jsonOutput(_ result: BudgetResult) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(result)
-        print(String(data: data, encoding: .utf8) ?? "{}")
+        return String(data: data, encoding: .utf8) ?? "{}"
     }
 }

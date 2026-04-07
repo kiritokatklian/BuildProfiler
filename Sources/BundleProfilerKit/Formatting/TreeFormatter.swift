@@ -251,11 +251,26 @@ public struct TreeFormatter: Sendable {
     }
 
     private func formatAssetCatalogs(_ catalogs: [AssetCatalogInfo]) -> [String] {
-        catalogs.map { cat in
+        var lines: [String] = []
+        for cat in catalogs {
             let path = cat.path.padding(toLength: 30, withPad: " ", startingAt: 0)
             let size = SizeFormatter.padded(cat.fileSize)
-            return "  \(path) \(size)    (\(cat.assetCount) assets)"
+            lines.append("  \(path) \(size)    (\(cat.assetCount) assets)")
+
+            let sorted = cat.assets.sorted { ($0.size ?? 0) > ($1.size ?? 0) }
+            let top5 = sorted.prefix(5)
+            for asset in top5 {
+                let assetName = (asset.renditionName ?? asset.name)
+                    .padding(toLength: 28, withPad: " ", startingAt: 0)
+                let assetSize = SizeFormatter.padded(asset.size ?? 0)
+                lines.append("    \(assetName) \(assetSize)")
+            }
+            let remaining = sorted.count - top5.count
+            if remaining > 0 {
+                lines.append("    ... and \(remaining) more")
+            }
         }
+        return lines
     }
 
     private func formatDuplicates(_ duplicates: [DuplicateGroup]) -> [String] {

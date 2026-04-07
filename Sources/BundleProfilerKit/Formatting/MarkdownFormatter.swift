@@ -88,6 +88,35 @@ public struct MarkdownFormatter: Sendable {
             lines.append("")
         }
 
+        // Asset catalogs
+        let nonEmptyCatalogs = bundle.assetCatalogs.filter { $0.assetCount > 0 }
+        if !nonEmptyCatalogs.isEmpty {
+            lines.append("### Asset Catalogs")
+            lines.append("")
+            for catalog in nonEmptyCatalogs {
+                let catalogName = (catalog.path as NSString).lastPathComponent
+                lines.append("**\(catalogName)** — \(SizeFormatter.format(catalog.fileSize)) (\(catalog.assetCount) assets)")
+                lines.append("")
+                let sorted = catalog.assets.sorted { ($0.size ?? 0) > ($1.size ?? 0) }
+                let top10 = sorted.prefix(10)
+                if !top10.isEmpty {
+                    lines.append("| Asset | Size |")
+                    lines.append("|-------|------|")
+                    for asset in top10 {
+                        let name = asset.renditionName ?? asset.name
+                        let size = SizeFormatter.format(asset.size ?? 0)
+                        lines.append("| \(name) | \(size) |")
+                    }
+                    let remaining = sorted.count - top10.count
+                    if remaining > 0 {
+                        lines.append("")
+                        lines.append("*... and \(remaining) more assets*")
+                    }
+                    lines.append("")
+                }
+            }
+        }
+
         // Duplicates
         if !bundle.duplicates.isEmpty {
             lines.append("### Duplicate Resources")

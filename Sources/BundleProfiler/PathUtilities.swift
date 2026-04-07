@@ -14,3 +14,11 @@ func resolvePath(_ path: String) -> String {
     }
     return FileManager.default.currentDirectoryPath + "/" + path
 }
+
+func writeOutput(_ content: String, to path: String?) throws {
+    if let path {
+        try content.write(to: URL(fileURLWithPath: resolvePath(path)), atomically: true, encoding: .utf8)
+    } else {
+        print(content)
+    }
+}

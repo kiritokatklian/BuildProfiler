@@ -27,6 +27,9 @@ struct AnalyzeCommand: ParsableCommand {
     @Option(name: .long, help: "Output format: tree (default), json, html, or markdown.")
     var format: OutputFormat = .tree
 
+    @Option(name: .shortAndLong, help: "Write output to a file instead of stdout.")
+    var output: String?
+
     @Option(name: .long, help: "Show top N largest files.")
     var top: Int?
 
@@ -47,21 +50,22 @@ struct AnalyzeCommand: ParsableCommand {
         let analyzer = BundleAnalyzer(options: options)
         let result = try analyzer.analyze(path: resolvedPath)
 
+        let content: String
         switch self.format {
         case .tree:
             let formatter = TreeFormatter()
-            print(formatter.format(bundle: result, topN: self.top))
+            content = formatter.format(bundle: result, topN: self.top)
         case .json:
             let formatter = JSONFormatter()
-            let output = try formatter.format(bundle: result)
-            print(output)
+            content = try formatter.format(bundle: result)
         case .html:
             let formatter = HTMLFormatter()
-            let output = try formatter.format(bundle: result)
-            print(output)
+            content = try formatter.format(bundle: result)
         case .markdown:
             let formatter = MarkdownFormatter()
-            print(formatter.format(bundle: result))
+            content = formatter.format(bundle: result)
         }
+
+        try writeOutput(content, to: self.output)
     }
 }

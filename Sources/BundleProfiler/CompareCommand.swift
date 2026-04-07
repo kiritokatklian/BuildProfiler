@@ -30,6 +30,9 @@ struct CompareCommand: ParsableCommand {
     @Option(name: .long, help: "Output format: tree (default), json, or markdown.")
     var format: OutputFormat = .tree
 
+    @Option(name: .shortAndLong, help: "Write output to a file instead of stdout.")
+    var output: String?
+
     @Option(name: .long, help: "Minimum size delta in bytes to include a file in the report.")
     var threshold: UInt64 = 0
 
@@ -47,20 +50,22 @@ struct CompareCommand: ParsableCommand {
             threshold: self.threshold
         )
 
+        let content: String
         switch self.format {
         case .tree:
             let formatter = TreeFormatter()
-            print(formatter.format(comparison: comparison))
+            content = formatter.format(comparison: comparison)
         case .json:
             let formatter = JSONFormatter()
-            let output = try formatter.format(comparison: comparison)
-            print(output)
+            content = try formatter.format(comparison: comparison)
         case .markdown:
             let formatter = MarkdownFormatter()
-            print(formatter.format(comparison: comparison))
+            content = formatter.format(comparison: comparison)
         case .html:
             let formatter = TreeFormatter()
-            print(formatter.format(comparison: comparison))
+            content = formatter.format(comparison: comparison)
         }
+
+        try writeOutput(content, to: self.output)
     }
 }
