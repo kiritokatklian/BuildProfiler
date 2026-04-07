@@ -40,11 +40,15 @@ public struct MachOSlice: Codable, Sendable {
     /// Segments within this slice.
     public let segments: [MachOSegment]
 
-    public init(architecture: String, offset: UInt64, size: UInt64, segments: [MachOSegment]) {
+    /// Linked dynamic library dependencies.
+    public let dependencies: [DylibDependency]
+
+    public init(architecture: String, offset: UInt64, size: UInt64, segments: [MachOSegment], dependencies: [DylibDependency] = []) {
         self.architecture = architecture
         self.offset = offset
         self.size = size
         self.segments = segments
+        self.dependencies = dependencies
     }
 }
 

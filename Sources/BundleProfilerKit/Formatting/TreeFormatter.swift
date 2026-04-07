@@ -38,6 +38,25 @@ public struct TreeFormatter: Sendable {
             lines.append(contentsOf: self.formatMachOInfo(machO))
         }
 
+        // App thinning estimates
+        if bundle.mainExecutable != nil {
+            let simulator = ThinningSimulator()
+            let report = simulator.simulate(bundle: bundle)
+            if !report.estimates.isEmpty {
+                lines.append("")
+                lines.append("APP THINNING ESTIMATES")
+                lines.append(String(repeating: "-", count: Self.lineWidth))
+                lines.append("  \("Architecture".padding(toLength: 14, withPad: " ", startingAt: 0)) \("Estimated".padding(toLength: 12, withPad: " ", startingAt: 0)) \("Binary".padding(toLength: 12, withPad: " ", startingAt: 0)) Resources")
+                for estimate in report.estimates {
+                    let arch = estimate.architecture.padding(toLength: 14, withPad: " ", startingAt: 0)
+                    let est = SizeFormatter.padded(estimate.estimatedSize, width: 12)
+                    let bin = SizeFormatter.padded(estimate.binarySize, width: 12)
+                    let res = SizeFormatter.format(estimate.resourceSize)
+                    lines.append("  \(arch) \(est) \(bin) \(res)")
+                }
+            }
+        }
+
         // Embedded frameworks
         if !bundle.frameworks.isEmpty {
             lines.append("")
@@ -197,6 +216,23 @@ public struct TreeFormatter: Sendable {
                     let sectName = section.name.padding(toLength: 22, withPad: " ", startingAt: 0)
                     let sectSize = SizeFormatter.padded(section.size, width: 10)
                     lines.append("      \(sectName) \(sectSize)")
+                }
+            }
+
+            // Linked libraries
+            if !slice.dependencies.isEmpty {
+                lines.append("")
+                lines.append("  Linked Libraries (\(slice.dependencies.count)):")
+                for dep in slice.dependencies {
+                    let tag: String
+                    switch dep.type {
+                    case .load: tag = ""
+                    case .weak: tag = " [weak]"
+                    case .reexport: tag = " [reexport]"
+                    case .lazy: tag = " [lazy]"
+                    }
+                    let shortName = (dep.name as NSString).lastPathComponent
+                    lines.append("    \(shortName)\(tag)  (compat: \(dep.compatibilityVersion), current: \(dep.currentVersion))")
                 }
             }
         }

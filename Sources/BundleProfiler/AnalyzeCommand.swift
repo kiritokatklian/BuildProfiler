@@ -13,13 +13,18 @@ import Foundation
 struct AnalyzeCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "analyze",
-        abstract: "Analyze an .app bundle or .ipa file."
+        abstract: "Analyze an .app bundle or .ipa file.",
+        discussion: """
+        Produces a full size report: category breakdown, Mach-O segments and \
+        linked dylibs, per-architecture thinning estimates, embedded frameworks, \
+        asset catalogs, and duplicate resources.
+        """
     )
 
     @Argument(help: "Path to the .app bundle or .ipa file.")
     var path: String
 
-    @Option(name: .long, help: "Output format: tree (default) or json.")
+    @Option(name: .long, help: "Output format: tree (default), json, html, or markdown.")
     var format: OutputFormat = .tree
 
     @Option(name: .long, help: "Show top N largest files.")
@@ -50,18 +55,13 @@ struct AnalyzeCommand: ParsableCommand {
             let formatter = JSONFormatter()
             let output = try formatter.format(bundle: result)
             print(output)
+        case .html:
+            let formatter = HTMLFormatter()
+            let output = try formatter.format(bundle: result)
+            print(output)
+        case .markdown:
+            let formatter = MarkdownFormatter()
+            print(formatter.format(bundle: result))
         }
     }
-}
-
-enum OutputFormat: String, ExpressibleByArgument {
-    case tree
-    case json
-}
-
-private func resolvePath(_ path: String) -> String {
-    if path.hasPrefix("/") || path.hasPrefix("~") {
-        return (path as NSString).expandingTildeInPath
-    }
-    return FileManager.default.currentDirectoryPath + "/" + path
 }

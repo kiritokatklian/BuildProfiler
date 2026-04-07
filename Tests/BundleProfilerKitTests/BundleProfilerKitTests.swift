@@ -145,6 +145,102 @@ struct MachOParserTests {
             #expect(!slice.segments.isEmpty)
         }
     }
+
+    @Test("Parses dylib dependencies from system binary")
+    func parseDylibDependencies() throws {
+        let info = try MachOParser.parse(path: "/usr/bin/true")
+        // /usr/bin/true links at least libSystem.B.dylib
+        let allDeps = info.slices.flatMap(\.dependencies)
+        #expect(!allDeps.isEmpty)
+        #expect(allDeps.contains { $0.name.contains("libSystem") })
+    }
+}
+
+@Suite("DylibVersion Tests")
+struct DylibVersionTests {
+    @Test("Decodes encoded version")
+    func decodeVersion() {
+        // 1.2.3 encoded as (1 << 16) | (2 << 8) | 3 = 0x00010203 = 66051
+        let version = DylibVersion.from(encoded: 66051)
+        #expect(version.major == 1)
+        #expect(version.minor == 2)
+        #expect(version.patch == 3)
+        #expect(version.description == "1.2.3")
+    }
+
+    @Test("Decodes zero version")
+    func decodeZero() {
+        let version = DylibVersion.from(encoded: 0)
+        #expect(version.major == 0)
+        #expect(version.minor == 0)
+        #expect(version.patch == 0)
+    }
+
+    @Test("Decodes large version numbers")
+    func decodeLargeVersion() {
+        // 88.1.0 = (88 << 16) | (1 << 8) | 0
+        let encoded: UInt32 = (88 << 16) | (1 << 8)
+        let version = DylibVersion.from(encoded: encoded)
+        #expect(version.major == 88)
+        #expect(version.minor == 1)
+        #expect(version.patch == 0)
+    }
+}
+
+@Suite("BudgetParser Tests")
+struct BudgetParserTests {
+    @Test("Parses MB values")
+    func parseMB() throws {
+        let bytes = try BudgetParser.parse("50MB").get()
+        #expect(bytes == 50 * 1_048_576)
+    }
+
+    @Test("Parses GB values")
+    func parseGB() throws {
+        let bytes = try BudgetParser.parse("1.5GB").get()
+        #expect(bytes == UInt64(1.5 * 1_073_741_824))
+    }
+
+    @Test("Parses KB values")
+    func parseKB() throws {
+        let bytes = try BudgetParser.parse("500KB").get()
+        #expect(bytes == 500 * 1024)
+    }
+
+    @Test("Parses bare byte values")
+    func parseBareBytes() throws {
+        let bytes = try BudgetParser.parse("1048576").get()
+        #expect(bytes == 1_048_576)
+    }
+
+    @Test("Case insensitive")
+    func caseInsensitive() throws {
+        let lower = try BudgetParser.parse("50mb").get()
+        let upper = try BudgetParser.parse("50MB").get()
+        #expect(lower == upper)
+    }
+
+    @Test("Rejects invalid input")
+    func rejectInvalid() {
+        let result = BudgetParser.parse("abc")
+        switch result {
+        case .success:
+            Issue.record("Expected failure for invalid input")
+        case .failure:
+            break // expected
+        }
+    }
+
+    @Test("Rejects empty input")
+    func rejectEmpty() {
+        let result = BudgetParser.parse("")
+        switch result {
+        case .success:
+            Issue.record("Expected failure for empty input")
+        case .failure:
+            break // expected
+        }
+    }
 }
 
 @Suite("FileWalker Tests")

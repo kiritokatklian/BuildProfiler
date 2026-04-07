@@ -20,6 +20,10 @@ public struct MachOParser: Sendable {
 
     // Load command types
     private static let LC_SEGMENT_64: UInt32 = 0x19
+    private static let LC_LOAD_DYLIB: UInt32 = 0x0C
+    private static let LC_LOAD_WEAK_DYLIB: UInt32 = 0x8000_0018
+    private static let LC_REEXPORT_DYLIB: UInt32 = 0x8000_001F
+    private static let LC_LAZY_LOAD_DYLIB: UInt32 = 0x20
 
     // CPU types
     private static let CPU_TYPE_ARM64: UInt32 = 0x0100_000C
@@ -128,7 +132,8 @@ public struct MachOParser: Sendable {
                     architecture: self.architectureName(for: cpuType),
                     offset: UInt64(offset),
                     size: UInt64(size),
-                    segments: slice.segments
+                    segments: slice.segments,
+                    dependencies: slice.dependencies
                 )
             }
 
@@ -159,6 +164,7 @@ public struct MachOParser: Sendable {
 
         let arch = self.architectureName(for: cpuType)
         var segments: [MachOSegment] = []
+        var dependencies: [DylibDependency] = []
         var cmdOffset = offset + headerSize
 
         guard cmdOffset + Int(sizeOfCmds) <= data.count else {
@@ -183,6 +189,8 @@ public struct MachOParser: Sendable {
                 if let segment = parseSegment64(data: data, offset: cmdOffset, swapped: swapped) {
                     segments.append(segment)
                 }
+            } else if let dep = parseDylibCommand(data: data, offset: cmdOffset, cmdSize: Int(cmdSize), cmd: cmd, swapped: swapped) {
+                dependencies.append(dep)
             }
 
             cmdOffset += Int(cmdSize)
@@ -194,7 +202,8 @@ public struct MachOParser: Sendable {
             architecture: arch,
             offset: UInt64(offset),
             size: sliceSize,
-            segments: segments
+            segments: segments,
+            dependencies: dependencies
         )
     }
 
@@ -241,6 +250,50 @@ public struct MachOParser: Sendable {
         }
 
         return MachOSegment(name: segName, fileSize: fileSize, vmSize: vmSize, sections: sections)
+    }
+
+    // MARK: - Dylib Command Parsing
+
+    /// Parse a dylib load command (`LC_LOAD_DYLIB`, `LC_LOAD_WEAK_DYLIB`, `LC_REEXPORT_DYLIB`, `LC_LAZY_LOAD_DYLIB`).
+    private static func parseDylibCommand(data: Data, offset: Int, cmdSize: Int, cmd: UInt32, swapped: Bool) -> DylibDependency? {
+        let dylibType: DylibType
+        switch cmd {
+        case self.LC_LOAD_DYLIB: dylibType = .load
+        case self.LC_LOAD_WEAK_DYLIB: dylibType = .weak
+        case self.LC_REEXPORT_DYLIB: dylibType = .reexport
+        case self.LC_LAZY_LOAD_DYLIB: dylibType = .lazy
+        default: return nil
+        }
+
+        // dylib_command layout:
+        // 0: cmd (4), 4: cmdsize (4),
+        // 8: name offset (4), 12: timestamp (4), 16: current_version (4), 20: compat_version (4)
+        guard cmdSize >= 24 else { return nil }
+
+        let (nameOffset, currentVersionRaw, compatVersionRaw) = data.withUnsafeBytes { buf -> (UInt32, UInt32, UInt32) in
+            let no = buf.load(fromByteOffset: offset + 8, as: UInt32.self)
+            let cv = buf.load(fromByteOffset: offset + 16, as: UInt32.self)
+            let cpv = buf.load(fromByteOffset: offset + 20, as: UInt32.self)
+            if swapped {
+                return (no.byteSwapped, cv.byteSwapped, cpv.byteSwapped)
+            }
+            return (no, cv, cpv)
+        }
+
+        // Extract null-terminated name string
+        let nameStart = offset + Int(nameOffset)
+        guard nameStart < offset + cmdSize else { return nil }
+        let nameLength = offset + cmdSize - nameStart
+        let name = self.readSegmentName(data: data, offset: nameStart, length: nameLength)
+
+        guard !name.isEmpty else { return nil }
+
+        return DylibDependency(
+            name: name,
+            type: dylibType,
+            currentVersion: DylibVersion.from(encoded: currentVersionRaw),
+            compatibilityVersion: DylibVersion.from(encoded: compatVersionRaw)
+        )
     }
 
     // MARK: - Helpers

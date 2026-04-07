@@ -13,7 +13,12 @@ import Foundation
 struct CompareCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "compare",
-        abstract: "Compare two .app bundles or .ipa files."
+        abstract: "Compare two .app bundles or .ipa files.",
+        discussion: """
+        Diffs a baseline and current bundle to show per-category and per-framework \
+        size deltas, plus lists of added, removed, and changed files. Use \
+        --threshold to filter noise.
+        """
     )
 
     @Argument(help: "Path to the baseline .app or .ipa.")
@@ -22,7 +27,7 @@ struct CompareCommand: ParsableCommand {
     @Argument(help: "Path to the current .app or .ipa.")
     var current: String
 
-    @Option(name: .long, help: "Output format: tree (default) or json.")
+    @Option(name: .long, help: "Output format: tree (default), json, or markdown.")
     var format: OutputFormat = .tree
 
     @Option(name: .long, help: "Minimum size delta in bytes to include a file in the report.")
@@ -50,13 +55,12 @@ struct CompareCommand: ParsableCommand {
             let formatter = JSONFormatter()
             let output = try formatter.format(comparison: comparison)
             print(output)
+        case .markdown:
+            let formatter = MarkdownFormatter()
+            print(formatter.format(comparison: comparison))
+        case .html:
+            let formatter = TreeFormatter()
+            print(formatter.format(comparison: comparison))
         }
     }
-}
-
-private func resolvePath(_ path: String) -> String {
-    if path.hasPrefix("/") || path.hasPrefix("~") {
-        return (path as NSString).expandingTildeInPath
-    }
-    return FileManager.default.currentDirectoryPath + "/" + path
 }
